@@ -4,6 +4,8 @@ A Discord bot made for facilitating movie polls for our weekly movie night (Satu
 
 Recently, we've had issues with the bot's uptime on Replit, so I've moved the whole source here and will be deploying it somewhere else.
 
+https://github.com/sbenemerito/movienightsbot/assets/20042067/8cfb7488-9647-49b1-9637-ce9af6af575c
+
 ## Setup (local)
 
 ### 1) Set environment variables
