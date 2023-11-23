@@ -1,75 +1,32 @@
-import json
 import os
 from datetime import datetime
 
 import discord
-import requests
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-from replit import db
 
+from db import get_db
 from keep_alive import keep_alive
-# from setup_db import setup_db
-# setup_db()
+from utils import embed_movie_details, get_movie_details
 
 # load env variables
 load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 TMDB_KEY = os.getenv('TMDB_KEY')
+CHANNEL_NAME = os.getenv('CHANNEL_NAME')
+SERVER_NAME = os.getenv('SERVER_NAME')
 SUPERUSER_ID = int(os.getenv('SUPERUSER_ID', '0'))
 
-bot = commands.Bot(command_prefix='!')
+# load db using util function
+db = get_db()
 
-
-def get_movie_details(title, year, movie_id=None):
-    payload = {
-        'api_key': TMDB_KEY,
-        'language': 'en-US',
-        'query': title,
-        'year': year,
-        'include_adult': True
-    }
-    api_key_param = {'api_key': TMDB_KEY}
-
-    if not movie_id:
-        response = requests.get('https://api.themoviedb.org/3/search/movie', params=payload).json()
-        if response['total_results'] != 1:
-            return None
-
-        movie_id = response['results'][0]['id']
-
-    response = requests.get(f'https://api.themoviedb.org/3/movie/{movie_id}', params=api_key_param)
-    movie_data = response.json()
-
-    response = requests.get(f'https://api.themoviedb.org/3/movie/{movie_id}/credits', params=api_key_param).json()
-    movie_data['actors'] = ', '.join(person['name'] for person in response['cast'][:5])
-    movie_data['actors'] = f'{movie_data["actors"]} (among others)'
-
-    movie_data['directors'] = ', '.join(person['name'] for person in response['crew'] if person['job'] == 'Director')
-
-    return movie_data
-
-
-def embed_movie_details(details, author=None):
-    embed = discord.Embed(
-        title='{} ({})'.format(details['title'], details['release_date'][:4]),
-        color=discord.Colour.orange()
-    )
-    embed.add_field(name='Genre', value=', '.join(genre['name'] for genre in details['genres']))
-    embed.add_field(name='Rated', value=f'{details["vote_average"]}/10')
-    embed.add_field(name='Actors', value=details['actors'])
-    embed.add_field(name='Plot', value=details['overview'])
-    embed.add_field(name='Director', value=details['directors'])
-    if details['poster_path']:
-        embed.set_thumbnail(url=f'https://image.tmdb.org/t/p/w300{details["poster_path"]}')
-        embed.set_footer(text='Click poster thumbnail to enlarge')
-    if author:
-        embed.set_author(name=author)
-    return embed
+# initialize bot
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 
 async def start_poll_exec(channel):
-    if channel.name != '╻🎥╹movie-nights' or db['poll_message_id']:
+    if channel.name != CHANNEL_NAME or db['poll_message_id']:
         return
 
     description = ''
@@ -87,10 +44,11 @@ async def start_poll_exec(channel):
         await message.add_reaction(db['reactions'][i])
 
     db['poll_message_id'] = message.id
+    db.commit()
 
 
 async def end_poll_exec(channel):
-    if channel.name != '╻🎥╹movie-nights' or db['poll_message_id'] is None:
+    if channel.name != CHANNEL_NAME or db['poll_message_id'] is None:
         return
 
     message = await channel.fetch_message(db['poll_message_id'])
@@ -109,6 +67,7 @@ async def end_poll_exec(channel):
     db['movie_list'] = []
     db['movie_list_details'] = []
     db['movie_nominators_list'] = []
+    db.commit()
 
 
 @bot.event
@@ -120,12 +79,14 @@ async def on_ready():
 
 @bot.command(name='nominate')
 async def nominate(ctx, *, arg=None):
-    if ctx.channel.name != '╻🎥╹movie-nights':
+    if ctx.channel.name != CHANNEL_NAME:
         return
 
     if not arg:
         await ctx.channel.send(
-            'No movie title included! Use `!nominate <movie_title>` to nominate a movie to the poll. Add a `-year` flag like `!nominate the call -year 2020` if you want to specify a release year.'
+            'No movie title included! Use `!nominate <movie_title>` to nominate a movie '\
+            'to the poll. Add a `-year` flag like `!nominate the call -year 2020` if you '\
+            'want to specify a release year.'
         )
         return
 
@@ -137,7 +98,7 @@ async def nominate(ctx, *, arg=None):
     user_input = arg.split()
     if '-id' in user_input:
         movie_id = user_input[-1]
-        movie_details = get_movie_details(None, None, movie_id)
+        movie_details = get_movie_details(None, None, TMDB_KEY, movie_id)
     else:
         if '-year' in user_input:
             year = user_input[-1]
@@ -146,12 +107,14 @@ async def nominate(ctx, *, arg=None):
             year = ''
             movie_title = ' '.join(user_input).title()
 
-        movie_details = get_movie_details(movie_title, year)
+        movie_details = get_movie_details(movie_title, year, TMDB_KEY)
 
     if movie_details is None:
-        message = 'Multiple or no matches. Please help me by:\n1) Looking the movie up on https://www.themoviedb.org/'\
-                  '\n2) Taking the movie `id` from movie URL (ex: `27205` in `https://www.themoviedb.org/movie/27205-inception`)'\
-                  '\n3) Then doing `!nominate -id <id>`.'
+        message = 'Multiple or no matches. Please help me by:'\
+                  '\n1) Looking the movie up on https://www.themoviedb.org/'\
+                  '\n2) Taking the movie `id` from movie URL '\
+                  '(ex: `27205` in `https://www.themoviedb.org/movie/27205-inception`)'\
+                  '\n3) Then doing `!nominate -id <id>`.\n'
         await ctx.channel.send('{}'.format(message))
         return
 
@@ -168,6 +131,7 @@ async def nominate(ctx, *, arg=None):
     db['movie_nominators_list'] = db['movie_nominators_list'] + [
         ctx.message.author.id
     ]
+    db.commit()
 
     await ctx.channel.send('', embed=embed_movie_details(movie_details))
 
@@ -189,7 +153,7 @@ async def nominate(ctx, *, arg=None):
 
 @bot.command(name='remove')
 async def remove(ctx, index):
-    if ctx.channel.name != '╻🎥╹movie-nights':
+    if ctx.channel.name != CHANNEL_NAME:
         return
 
     if not index.isdigit() or int(index) == 0 or int(index) > len(
@@ -222,6 +186,7 @@ async def remove(ctx, index):
     db['movie_list'] = tmp_movie_list
     db['movie_list_details'] = tmp_movie_list_details
     db['movie_nominators_list'] = tmp_movie_nominators_list
+    db.commit()
 
     embed = discord.Embed(
         title='Successfully removed `{}`'.format(movie_entry),
@@ -231,7 +196,7 @@ async def remove(ctx, index):
 
 @bot.command(name='movies')
 async def movies(ctx):
-    if ctx.channel.name != '╻🎥╹movie-nights':
+    if ctx.channel.name != CHANNEL_NAME:
         return
 
     description = '`!details <number_in_list>` to get movie details\n'
@@ -249,7 +214,7 @@ async def movies(ctx):
 
 @bot.command(name='details')
 async def details(ctx, index):
-    if ctx.channel.name != '╻🎥╹movie-nights':
+    if ctx.channel.name != CHANNEL_NAME:
         return
 
     if index.isdigit() and int(index) > 0 and int(index) <= len(
@@ -259,8 +224,7 @@ async def details(ctx, index):
                                    db['movie_list_details'][int(index) - 1]))
         return
 
-    await ctx.channel.send('Invalid number provided! Please refer to `!movies`'
-                           )
+    await ctx.channel.send('Invalid number provided! Please refer to `!movies`')
 
 
 @tasks.loop(hours=24)
@@ -268,8 +232,8 @@ async def start_poll():
     day = datetime.now().strftime("%A")
 
     channel = discord.utils.get(bot.get_all_channels(),
-                                guild__name="Limbagong",
-                                name='╻🎥╹movie-nights')
+                                guild__name=SERVER_NAME,
+                                name=CHANNEL_NAME)
     if day == 'Monday' and not db['poll_message_id']:
         await start_poll_exec(channel)
 
@@ -278,18 +242,14 @@ async def start_poll():
 async def end_poll():
     day = datetime.now().strftime("%A")
 
-    channel = discord.utils.get(bot.get_all_channels(),
-                                guild__name="Limbagong",
-                                name='╻🎥╹movie-nights')
+    channel = discord.utils.get(bot.get_all_channels(), guild__name=SERVER_NAME, name=CHANNEL_NAME)
     if day == 'Friday':
         await end_poll_exec(channel)
 
 
 @bot.command(name='force_start_poll')
 async def force_start_poll(ctx):
-    channel = discord.utils.get(bot.get_all_channels(),
-                                guild__name="Limbagong",
-                                name='╻🎥╹movie-nights')
+    channel = discord.utils.get(bot.get_all_channels(), guild__name=SERVER_NAME, name=CHANNEL_NAME)
     author = ctx.message.author
     if author.id == SUPERUSER_ID:
         await start_poll_exec(channel)
@@ -298,8 +258,8 @@ async def force_start_poll(ctx):
 @bot.command(name='force_end_poll')
 async def force_end_poll(ctx):
     channel = discord.utils.get(bot.get_all_channels(),
-                                guild__name="Limbagong",
-                                name='╻🎥╹movie-nights')
+                                guild__name=SERVER_NAME,
+                                name=CHANNEL_NAME)
     author = ctx.message.author
     if author.id == SUPERUSER_ID:
         await end_poll_exec(channel)
@@ -317,5 +277,6 @@ async def poll(ctx):
 
 
 keep_alive()
-bot.run(DISCORD_TOKEN)
-
+bot.run(DISCORD_TOKEN)  # program execution pauses here
+# so this only gets ran when discord bot stops running
+db.close()
