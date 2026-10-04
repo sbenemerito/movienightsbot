@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, time
 
 import discord
 from discord.ext import commands, tasks
@@ -15,6 +15,9 @@ TMDB_KEY = os.getenv('TMDB_KEY')
 CHANNEL_NAME = os.getenv('CHANNEL_NAME')
 SERVER_NAME = os.getenv('SERVER_NAME')
 SUPERUSER_ID = int(os.getenv('SUPERUSER_ID', '0'))
+
+# daily poll check runs at this local time (discord.py treats naive times as UTC)
+POLL_CHECK_TIME = time(hour=0, minute=5, tzinfo=datetime.now().astimezone().tzinfo)
 
 # load db using util function
 db = get_db()
@@ -114,6 +117,10 @@ async def on_ready():
         start_poll.start()
     if not end_poll.is_running():
         end_poll.start()
+
+    # time-based loops don't run on start, so catch up on any missed day now
+    await start_poll()
+    await end_poll()
 
 
 @bot.command(name='nominate')
@@ -266,23 +273,26 @@ async def details(ctx, index):
     await ctx.channel.send('Invalid number provided! Please refer to `!movies`')
 
 
-@tasks.loop(hours=24)
+@tasks.loop(time=POLL_CHECK_TIME)
 async def start_poll():
-    day = datetime.now().strftime("%A")
+    weekday = datetime.now().weekday()  # Monday is 0
 
     channel = discord.utils.get(bot.get_all_channels(),
                                 guild__name=SERVER_NAME,
                                 name=CHANNEL_NAME)
-    if day == 'Monday' and not db['poll_message_id']:
+    # Monday to Thursday, so a missed Monday still gets a poll; only nag about
+    # an empty list on Monday so later days don't repeat the reminder
+    if weekday <= 3 and not db['poll_message_id'] and (db['movie_list'] or weekday == 0):
         await start_poll_exec(channel)
 
 
-@tasks.loop(hours=24)
+@tasks.loop(time=POLL_CHECK_TIME)
 async def end_poll():
-    day = datetime.now().strftime("%A")
+    weekday = datetime.now().weekday()  # Monday is 0
 
     channel = discord.utils.get(bot.get_all_channels(), guild__name=SERVER_NAME, name=CHANNEL_NAME)
-    if day == 'Friday':
+    # Friday to Sunday, so a missed Friday still closes the poll
+    if weekday >= 4 and db['poll_message_id']:
         await end_poll_exec(channel)
 
 
