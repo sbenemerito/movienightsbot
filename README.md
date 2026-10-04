@@ -24,6 +24,18 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Setup (Docker)
+
+Create the `.env` file as above, then:
+
+```bash
+docker build -t movienightsbot .
+docker run -d --name movienightsbot --env-file .env -e TZ=Asia/Manila \
+  -v "$PWD/data:/data" --restart unless-stopped movienightsbot
+```
+
+The SQLite db is stored at `/data/data.sqlite` inside the container (override with `DB_PATH`). Set `TZ`, because the poll starts and ends based on the local weekday.
+
 ### Tests
 
 Not exactly sure how to unit test Discord bots, so there are none, apparently.

@@ -1,6 +1,8 @@
+import os
+
 from sqlitedict import SqliteDict
 
-db = SqliteDict('data.sqlite')
+db = SqliteDict(os.getenv('DB_PATH', 'data.sqlite'))
 
 
 def get_initial_db_data():

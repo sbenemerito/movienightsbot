@@ -6,7 +6,6 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from db import get_db
-from keep_alive import keep_alive
 from utils import embed_movie_details, get_movie_details
 
 # load env variables
@@ -73,8 +72,11 @@ async def end_poll_exec(channel):
 @bot.event
 async def on_ready():
     print('Connected!')
-    start_poll.start()
-    end_poll.start()
+    # on_ready fires again after reconnects, so don't relaunch running loops
+    if not start_poll.is_running():
+        start_poll.start()
+    if not end_poll.is_running():
+        end_poll.start()
 
 
 @bot.command(name='nominate')
@@ -276,7 +278,6 @@ async def poll(ctx):
         message.jump_url))
 
 
-keep_alive()
 bot.run(DISCORD_TOKEN)  # program execution pauses here
 # so this only gets ran when discord bot stops running
 db.close()
