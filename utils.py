@@ -42,16 +42,28 @@ def get_movie_details(title, year, API_KEY, movie_id=None):
     return movie_data
 
 
+def _truncate(text, limit):
+    return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
+def _field_value(value):
+    value = (value or '').strip()
+    return _truncate(value, 1024) if value else 'N/A'
+
+
 def embed_movie_details(details, author=None):
+    year = (details.get('release_date') or '')[:4]
+    suffix = f' ({year})' if year else ''
     embed = discord.Embed(
-        title='{} ({})'.format(details['title'], details['release_date'][:4]),
+        title=_truncate(details['title'], 256 - len(suffix)) + suffix,
         color=discord.Colour.orange()
     )
-    embed.add_field(name='Genre', value=', '.join(genre['name'] for genre in details['genres']))
+    genres = ', '.join(genre['name'] for genre in details.get('genres') or [])
+    embed.add_field(name='Genre', value=_field_value(genres))
     embed.add_field(name='Rated', value=f'{details["vote_average"]}/10')
-    embed.add_field(name='Actors', value=details['actors'])
-    embed.add_field(name='Plot', value=details['overview'])
-    embed.add_field(name='Director', value=details['directors'])
+    embed.add_field(name='Actors', value=_field_value(details['actors']))
+    embed.add_field(name='Plot', value=_field_value(details['overview']))
+    embed.add_field(name='Director', value=_field_value(details['directors']))
     if details['poster_path']:
         embed.set_thumbnail(url=f'https://image.tmdb.org/t/p/w300{details["poster_path"]}')
         embed.set_footer(text='Click poster thumbnail to enlarge')
