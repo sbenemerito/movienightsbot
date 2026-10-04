@@ -1,3 +1,4 @@
+import asyncio
 import os
 from datetime import datetime, time
 
@@ -146,7 +147,7 @@ async def nominate(ctx, *, arg=None):
     try:
         if '-id' in user_input:
             movie_id = user_input[-1]
-            movie_details = get_movie_details(None, None, TMDB_KEY, movie_id)
+            movie_details = await asyncio.to_thread(get_movie_details, None, None, TMDB_KEY, movie_id)
         else:
             if '-year' in user_input:
                 year = user_input[-1]
@@ -155,7 +156,7 @@ async def nominate(ctx, *, arg=None):
                 year = ''
                 movie_title = ' '.join(user_input).title()
 
-            movie_details = get_movie_details(movie_title, year, TMDB_KEY)
+            movie_details = await asyncio.to_thread(get_movie_details, movie_title, year, TMDB_KEY)
     except requests.HTTPError as e:
         # invalid/nonexistent id -> fall through to the "no matches" help below
         if e.response is None or e.response.status_code != 404:
