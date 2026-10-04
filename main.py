@@ -28,6 +28,12 @@ async def start_poll_exec(channel):
     if channel.name != CHANNEL_NAME or db['poll_message_id']:
         return
 
+    if not db['movie_list']:
+        await channel.send(
+            'No movies have been nominated yet! Use `!nominate <movie_title>` '
+            'to nominate a movie to the poll.')
+        return
+
     description = ''
     for i, item in enumerate(db['movie_list']):
         description += '\n{} - {}'.format(db['reactions'][i], item)
