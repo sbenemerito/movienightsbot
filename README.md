@@ -55,7 +55,7 @@ The poll automatically starts every Monday, and ends every Friday.
 ```
 !movies -> List of nominated movies
 
-!nominate <movie_name> -year <year released> (-year is optional) -> Nominate movie by title
+!nominate <movie_name> -year <year released> (-year is optional) -> Nominate movie by title (if there are multiple matches, pick one from a dropdown)
 
 !nominate -id 508442 -> Nominate movie by movie ID in themoviedb.org
 

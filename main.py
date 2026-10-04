@@ -8,7 +8,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from db import get_db
-from utils import embed_movie_details, get_movie_details
+from utils import embed_movie_details, get_movie_details, movie_select_option, search_movies
 
 # load env variables
 load_dotenv()
@@ -20,6 +20,12 @@ SUPERUSER_ID = int(os.getenv('SUPERUSER_ID', '0'))
 
 # daily poll check runs at this local time (discord.py treats naive times as UTC)
 POLL_CHECK_TIME = time(hour=0, minute=5, tzinfo=datetime.now().astimezone().tzinfo)
+
+ID_HELP = 'Please help me by:'\
+          '\n1) Looking the movie up on https://www.themoviedb.org/'\
+          '\n2) Taking the movie `id` from movie URL '\
+          '(ex: `27205` in `https://www.themoviedb.org/movie/27205-inception`)'\
+          '\n3) Then doing `!nominate -id <id>`.\n'
 
 # load db using util function
 db = get_db()
@@ -125,6 +131,106 @@ async def on_ready():
     await end_poll()
 
 
+async def call_tmdb(channel, func, *args):
+    # run a blocking TMDB lookup off the event loop; reply and return None on errors
+    try:
+        return await asyncio.to_thread(func, *args, TMDB_KEY)
+    except requests.HTTPError as e:
+        # invalid/nonexistent id -> "no matches" help
+        if e.response is not None and e.response.status_code == 404:
+            await channel.send('No matches. {}'.format(ID_HELP))
+            return None
+    except (requests.RequestException, KeyError, ValueError):
+        pass
+    await channel.send("Couldn't reach TMDB, please try again later.")
+    return None
+
+
+def single_match(results, title):
+    # the only search result, or the only one whose title matches the query exactly
+    if len(results) == 1:
+        return results[0]
+    query = title.casefold()
+    exact = [result for result in results if query in (
+        (result.get('title') or '').casefold(), (result.get('original_title') or '').casefold())]
+    return exact[0] if len(exact) == 1 else None
+
+
+async def add_nomination(channel, author_id, movie_details):
+    if len(db['movie_list']) >= 10:
+        await channel.send('Maximum number of nominees!')
+        return
+
+    movie_entry = '{} ({})'.format(movie_details['title'],
+                                   movie_details['release_date'][:4])
+    if movie_entry in db['movie_list']:
+        await channel.send(
+            '`{}` has already been nominated! `!movies` to see the currently nominated movie(s)'
+            .format(movie_entry))
+        return
+
+    db['movie_list'] = db['movie_list'] + [movie_entry]
+    db['movie_list_details'] = db['movie_list_details'] + [movie_details]
+    db['movie_nominators_list'] = db['movie_nominators_list'] + [author_id]
+    db.commit()
+
+    await channel.send('', embed=embed_movie_details(movie_details))
+
+    if db['poll_message_id']:
+        message = await channel.fetch_message(db['poll_message_id'])
+
+        description = ''
+        for i, item in enumerate(db['movie_list']):
+            description += '\n{} - {}'.format(db['reactions'][i], item)
+
+        embed = discord.Embed(title='Movie Poll',
+                              description=description,
+                              color=discord.Colour.orange())
+        embed.set_footer(text='Poll ends on Friday')
+
+        await message.edit(content='', embed=embed)
+        await message.add_reaction(db['reactions'][len(db['movie_list']) - 1])
+
+
+class NominationPicker(discord.ui.View):
+    def __init__(self, author_id, results):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.message = None
+        self.pick.options = [movie_select_option(result) for result in results[:5]] + [
+            discord.SelectOption(label='None of these', value='none')
+        ]
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id == self.author_id:
+            return True
+        await interaction.response.send_message("This isn't your nomination!", ephemeral=True)
+        return False
+
+    async def on_timeout(self):
+        self.pick.disabled = True
+        try:
+            await self.message.edit(content='Movie picker timed out.', view=self)
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.select(placeholder='Pick the movie to nominate')
+    async def pick(self, interaction, select):
+        self.stop()
+        select.disabled = True
+        choice = next(option for option in select.options if option.value == select.values[0])
+        # editing the picker acknowledges the interaction before the slow TMDB lookup
+        await interaction.response.edit_message(content='Picked `{}`.'.format(choice.label), view=self)
+
+        if choice.value == 'none':
+            await interaction.channel.send('No problem! {}'.format(ID_HELP))
+            return
+
+        movie_details = await call_tmdb(interaction.channel, get_movie_details, choice.value)
+        if movie_details:
+            await add_nomination(interaction.channel, interaction.user.id, movie_details)
+
+
 @bot.command(name='nominate')
 async def nominate(ctx, *, arg=None):
     if ctx.channel.name != CHANNEL_NAME:
@@ -138,74 +244,38 @@ async def nominate(ctx, *, arg=None):
         )
         return
 
-    if len(db['movie_list']) == 10:
+    if len(db['movie_list']) >= 10:
         await ctx.channel.send('Maximum number of nominees!')
         return
 
-    movie_details = None
     user_input = arg.split()
-    try:
-        if '-id' in user_input:
-            movie_id = user_input[-1]
-            movie_details = await asyncio.to_thread(get_movie_details, None, None, TMDB_KEY, movie_id)
+    if '-id' in user_input:
+        movie_id = user_input[-1]
+    else:
+        if '-year' in user_input:
+            year = user_input[-1]
+            movie_title = ' '.join(user_input[:-2]).title()
         else:
-            if '-year' in user_input:
-                year = user_input[-1]
-                movie_title = ' '.join(user_input[:-2]).title()
-            else:
-                year = ''
-                movie_title = ' '.join(user_input).title()
+            year = ''
+            movie_title = ' '.join(user_input).title()
 
-            movie_details = await asyncio.to_thread(get_movie_details, movie_title, year, TMDB_KEY)
-    except requests.HTTPError as e:
-        # invalid/nonexistent id -> fall through to the "no matches" help below
-        if e.response is None or e.response.status_code != 404:
-            await ctx.channel.send("Couldn't reach TMDB, please try again later.")
+        results = await call_tmdb(ctx.channel, search_movies, movie_title, year)
+        if results is None:
             return
-    except (requests.RequestException, KeyError, ValueError):
-        await ctx.channel.send("Couldn't reach TMDB, please try again later.")
-        return
+        if not results:
+            await ctx.channel.send('No matches. {}'.format(ID_HELP))
+            return
 
-    if movie_details is None:
-        message = 'Multiple or no matches. Please help me by:'\
-                  '\n1) Looking the movie up on https://www.themoviedb.org/'\
-                  '\n2) Taking the movie `id` from movie URL '\
-                  '(ex: `27205` in `https://www.themoviedb.org/movie/27205-inception`)'\
-                  '\n3) Then doing `!nominate -id <id>`.\n'
-        await ctx.channel.send('{}'.format(message))
-        return
+        match = single_match(results, movie_title)
+        if not match:
+            view = NominationPicker(ctx.author.id, results)
+            view.message = await ctx.send('Multiple matches found, pick one:', view=view)
+            return
+        movie_id = match['id']
 
-    movie_entry = '{} ({})'.format(movie_details['title'],
-                                   movie_details['release_date'][:4])
-    if movie_entry in db['movie_list']:
-        await ctx.channel.send(
-            '`{}` has already been nominated! `!movies` to see the currently nominated movie(s)'
-            .format(movie_entry))
-        return
-
-    db['movie_list'] = db['movie_list'] + [movie_entry]
-    db['movie_list_details'] = db['movie_list_details'] + [movie_details]
-    db['movie_nominators_list'] = db['movie_nominators_list'] + [
-        ctx.message.author.id
-    ]
-    db.commit()
-
-    await ctx.channel.send('', embed=embed_movie_details(movie_details))
-
-    if db['poll_message_id']:
-        message = await ctx.channel.fetch_message(db['poll_message_id'])
-
-        description = ''
-        for i, item in enumerate(db['movie_list']):
-            description += '\n{} - {}'.format(db['reactions'][i], item)
-
-        embed = discord.Embed(title='Movie Poll',
-                              description=description,
-                              color=discord.Colour.orange())
-        embed.set_footer(text='Poll ends on Friday')
-
-        await message.edit(content='', embed=embed)
-        await message.add_reaction(db['reactions'][len(db['movie_list']) - 1])
+    movie_details = await call_tmdb(ctx.channel, get_movie_details, movie_id)
+    if movie_details:
+        await add_nomination(ctx.channel, ctx.author.id, movie_details)
 
 
 @bot.command(name='remove')

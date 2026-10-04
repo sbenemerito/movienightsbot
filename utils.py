@@ -2,7 +2,7 @@ import discord
 import requests
 
 
-def get_movie_details(title, year, API_KEY, movie_id=None):
+def search_movies(title, year, API_KEY):
     payload = {
         'api_key': API_KEY,
         'language': 'en-US',
@@ -10,20 +10,17 @@ def get_movie_details(title, year, API_KEY, movie_id=None):
         'year': year,
         'include_adult': True
     }
+    response = requests.get(
+        'https://api.themoviedb.org/3/search/movie',
+        params=payload,
+        timeout=10
+    )
+    response.raise_for_status()
+    return response.json()['results']
+
+
+def get_movie_details(movie_id, API_KEY):
     api_key_param = {'api_key': API_KEY}
-
-    if not movie_id:
-        response = requests.get(
-            'https://api.themoviedb.org/3/search/movie',
-            params=payload,
-            timeout=10
-        )
-        response.raise_for_status()
-        response = response.json()
-        if response['total_results'] != 1:
-            return None
-
-        movie_id = response['results'][0]['id']
 
     response = requests.get(
         f'https://api.themoviedb.org/3/movie/{movie_id}',
@@ -78,3 +75,14 @@ def embed_movie_details(details, author=None):
     if author:
         embed.set_author(name=author)
     return embed
+
+
+def movie_select_option(result):
+    year = (result.get('release_date') or '')[:4]
+    suffix = f' ({year})' if year else ''
+    overview = (result.get('overview') or '').strip()
+    return discord.SelectOption(
+        label=_truncate(result.get('title') or 'Untitled', 100 - len(suffix)) + suffix,
+        value=str(result['id']),
+        description=_truncate(overview, 100) if overview else None
+    )
