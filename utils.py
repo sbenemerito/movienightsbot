@@ -15,8 +15,11 @@ def get_movie_details(title, year, API_KEY, movie_id=None):
     if not movie_id:
         response = requests.get(
             'https://api.themoviedb.org/3/search/movie',
-            params=payload
-        ).json()
+            params=payload,
+            timeout=10
+        )
+        response.raise_for_status()
+        response = response.json()
         if response['total_results'] != 1:
             return None
 
@@ -24,14 +27,19 @@ def get_movie_details(title, year, API_KEY, movie_id=None):
 
     response = requests.get(
         f'https://api.themoviedb.org/3/movie/{movie_id}',
-        params=api_key_param
+        params=api_key_param,
+        timeout=10
     )
+    response.raise_for_status()
     movie_data = response.json()
 
     response = requests.get(
         f'https://api.themoviedb.org/3/movie/{movie_id}/credits',
-        params=api_key_param
-    ).json()
+        params=api_key_param,
+        timeout=10
+    )
+    response.raise_for_status()
+    response = response.json()
     movie_data['actors'] = ', '.join(person['name'] for person in response['cast'][:5])
     movie_data['actors'] = f'{movie_data["actors"]} (among others)'
 

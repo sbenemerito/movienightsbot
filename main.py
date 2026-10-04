@@ -2,6 +2,7 @@ import os
 from datetime import datetime, time
 
 import discord
+import requests
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -142,18 +143,27 @@ async def nominate(ctx, *, arg=None):
 
     movie_details = None
     user_input = arg.split()
-    if '-id' in user_input:
-        movie_id = user_input[-1]
-        movie_details = get_movie_details(None, None, TMDB_KEY, movie_id)
-    else:
-        if '-year' in user_input:
-            year = user_input[-1]
-            movie_title = ' '.join(user_input[:-2]).title()
+    try:
+        if '-id' in user_input:
+            movie_id = user_input[-1]
+            movie_details = get_movie_details(None, None, TMDB_KEY, movie_id)
         else:
-            year = ''
-            movie_title = ' '.join(user_input).title()
+            if '-year' in user_input:
+                year = user_input[-1]
+                movie_title = ' '.join(user_input[:-2]).title()
+            else:
+                year = ''
+                movie_title = ' '.join(user_input).title()
 
-        movie_details = get_movie_details(movie_title, year, TMDB_KEY)
+            movie_details = get_movie_details(movie_title, year, TMDB_KEY)
+    except requests.HTTPError as e:
+        # invalid/nonexistent id -> fall through to the "no matches" help below
+        if e.response is None or e.response.status_code != 404:
+            await ctx.channel.send("Couldn't reach TMDB, please try again later.")
+            return
+    except (requests.RequestException, KeyError, ValueError):
+        await ctx.channel.send("Couldn't reach TMDB, please try again later.")
+        return
 
     if movie_details is None:
         message = 'Multiple or no matches. Please help me by:'\
