@@ -46,6 +46,21 @@ async def start_poll_exec(channel):
     db.commit()
 
 
+def count_poll_votes(reactions):
+    # map each poll emoji to its movie index, ignoring non-poll reactions
+    poll_reactions = db['reactions'][:len(db['movie_list'])]
+    votes = {}
+    for reaction in reactions:
+        emoji = str(reaction.emoji)
+        if emoji not in poll_reactions:
+            continue
+        # don't count the bot's own reaction
+        count = reaction.count - 1 if reaction.me else reaction.count
+        votes[db['reactions'].index(emoji)] = count
+
+    return votes
+
+
 async def end_poll_exec(channel):
     if channel.name != CHANNEL_NAME or db['poll_message_id'] is None:
         return
@@ -53,14 +68,30 @@ async def end_poll_exec(channel):
     message = await channel.fetch_message(db['poll_message_id'])
     await message.unpin()
 
-    highest = 0
-    for i, reaction in enumerate(message.reactions):
-        if reaction.count > message.reactions[highest].count:
-            highest = i
+    votes = count_poll_votes(message.reactions)
+    highest = max(votes.values(), default=0)
 
-    await channel.send('Poll closed!\n\n',
-                       embed=embed_movie_details(
-                           db['movie_list_details'][highest], 'Poll Winner'))
+    if highest == 0:
+        await channel.send('Poll closed!\n\nNo votes were cast.')
+    else:
+        tied = sorted(i for i, count in votes.items() if count == highest)
+        winner = tied[0]
+
+        content = 'Poll closed!\n\n'
+        if len(tied) > 1:
+            tied_titles = ', '.join('`{}`'.format(db['movie_list'][i])
+                                    for i in tied)
+            content += 'It\'s a tie between {} with {} vote(s) each! '\
+                       'Picking `{}`.'.format(tied_titles, highest,
+                                              db['movie_list'][winner])
+        else:
+            content += '`{}` wins with {} vote(s)!'.format(
+                db['movie_list'][winner], highest)
+
+        await channel.send(content,
+                           embed=embed_movie_details(
+                               db['movie_list_details'][winner],
+                               'Poll Winner'))
 
     db['poll_message_id'] = None
     db['movie_list'] = []
